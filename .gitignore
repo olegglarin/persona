@@ -13,6 +13,8 @@ wheels/
 .env
 .env.sandbox
 mcp_config.json
+mcp_config_copy.json
+
 
 # Temporary files
 mnt/*
