@@ -2,39 +2,97 @@
 
 ## Purpose
 
-Persona is a simple AI agent running from cli that:
-- performs general user tasks, like document processing, internet search and data manipulation
-- supports [Anthropic skills](https://agentskills.io/home) to satisfy user requests
+Persona is an AI agent CLI that:
+- Performs tasks like document processing, internet search, and data manipulation
+- Runs shell commands and generated code in an isolated Docker sandbox
+- Supports [Anthropic-style skills](https://agentskills.io/home) for specialized workflows
+- Provides session persistence and slash commands in an interactive REPL
 
-## Key features
-
-- Runs shell commands and executes generated Python code inside a disposable Docker Ubuntu sandbox container
-- Loads and exposes skill to the agent (see `--skills-dir`)
-- Exchanges files with the user via the folder (see `--mnt-dir`)
-
-## Prerequisites
-
-- Docker
-- Python 3.13+
-- uv package manager
-
-## Installation
+## Quick Start
 
 ```bash
+# Install
 git clone https://github.com/koryaga/persona.git
 cd persona
-uv sync
-source .venv/bin/activate
+uv sync && source .venv/bin/activate
+
+# Build sandbox
+docker build -t ubuntu.sandbox .
+
+# Configure
+cp .env.example .env
+
+# Run (interactive REPL)
+persona
+
+# Or single prompt
+persona "your task here"
 ```
 
-## Configuration
+## Interactive Mode
 
-Copy `.env.example` to `.env` and configure:
+The REPL provides a rich command-line interface with persistent sessions:
+
+```console
+persona CLI - Type /help for commands, /exit to quit
+persona >
+[latest] [0 tokens] [~/project] [~/skills] [MCP: Disabled] [cogito:14b]
+
+```
+
+**Slash commands:**
+
+| Command | Description |
+|---------|-------------|
+| `/save [name]` | Save current session |
+| `/load <name>` | Load a saved session |
+| `/list` | List all sessions |
+| `/new` | Start new session |
+| `/clear` | Clear terminal |
+| `/help` | Show commands |
+
+**Keyboard shortcuts:** `Ctrl+C` interrupt agent, `Ctrl+D` or `/exit` exit, `Ctrl+Z` suspend to background
+
+### Interactive examples
+
+```
+# Ask a question
+persona [latest] ➤ what is the weather today?
+
+# Work with files - your mounted directory is at /mnt
+persona [latest] ➤ read the README.md file from /mnt and summarize it
+
+# Use a skill
+persona [latest] ➤ /load my-project
+persona [my-project] ➤ @web-search find latest AI news
+
+# Save session for later
+persona [latest] ➤ /save my-research
+Session saved: my-research
+
+# Switch between sessions
+persona [latest] ➤ /load my-project
+Loaded session: my-project
+persona [my-project] ➤
+
+# Start fresh
+persona [my-project] ➤ /new
+Started new session.
+persona [latest] ➤
+```
+
+## Non-Interactive Mode
 
 ```bash
-cp .env.example .env
-# Edit .env with your API keys and settings
+persona "list files in /tmp"
+persona --stream -p "your prompt"
 ```
+
+## Sessions
+
+Conversations auto-save to `latest` after each response. Sessions are stored in your platform config directory (`~/.config/persona/sessions/` on macOS) and persist across restarts.
+
+## Configuration
 
 ### Environment variables
 
@@ -50,64 +108,50 @@ cp .env.example .env
 
 ### Sandbox environment variables
 
-Create `.env.sandbox` to pass environment variables into the sandbox container. Variables set in this file will be available inside the Docker container for skills to use.
-
-Example `.env.sandbox`:
-```bash
-TRAVILY_TOKEN=your-tavily-api-token
-SKILLSMP_API_KEY=your-skillsmp-api-key
-```
-
-[More configuration info](#skills) 
-
-## Build sandbox image
+Create `.env.sandbox` to pass variables into the Docker container:
 
 ```bash
-docker build -t ubuntu.sandbox .
+TRAVILY_TOKEN=your-tavily-token
+SKILLSMP_API_KEY=your-skillsmp-key
 ```
 
-## Usage
+### MCP Servers
 
-```bash
-persona [--mnt-dir PATH] [--skills-dir PATH]
-persona "single prompt"  # non-interactive mode
-```
-
-[More scenarios](https://habr.com/ru/articles/989338/)
-
-### Options
-
-- `--mnt-dir`: Host directory to mount inside sandbox (default: `.`)
-- `--no-mnt`: Don't mount any host directory at `/mnt`
-- `--skills-dir`: Host directory to mount at `/skills` inside sandbox (default: `skills`)
-- `--container-image`: Docker image to use for sandbox
-- `-p, --prompt`: Single prompt to execute (non-interactive mode)
-
-### Examples
-
-```bash
-# Run with default mounts (current directory)
-persona
-
-# No mount at all
-persona --no-mnt
-
-# Custom user directory
-persona --mnt-dir /home/user/project
-
-# Custom user directory and skill folder 
-persona --mnt-dir /home/user/project --skills-dir /home/user/persona/skills
-
-```
+Enable MCP servers via `mcp_config.json`. See `mcp_config.json.sample` for format.
 
 ## Skills
 
-Persona supports [Anthropic-style skills](https://agentskills.io/home). Skills are loaded from the `--skills-dir` (default: `skills/`).
+Persona supports [Anthropic-style skills](https://agentskills.io/home).
 
-Provided OOB:
-- [*skill-creator*](https://github.com/anthropics/skills/tree/main/skills/skill-creator) - Create new skills or update existing ones
-- [*web-search*](./skills/web-search/SKILL.md) - Web search with DuckDuckGo (default) or Tavily (with `TRAVILY_TOKEN`). Get Tavily token at: https://app.tavily.com/home
-- [*skillsmp-search*](./skills/skillsmp-search/SKILL.md) - Search AI skills from SkillsMP marketplace (requires `SKILLSMP_API_KEY` in `.env.sandbox`). Get API key at: https://skillsmp.com/docs/api
-- [*planning-with-files*](./skills/planning-with-files/SKILL.md) - Manus-style persistent markdown file planning for complex multi-step tasks
+Built-in skills:
+- **skill-creator** - Create or update skills
+- **web-search** - Web search (DuckDuckGo default, Tavily with `TRAVILY_TOKEN`)
+- **skillsmp-search** - Search SkillsMP marketplace (requires `SKILLSMP_API_KEY` in `.env.sandbox`)
+- **planning-with-files** - Markdown-based task planning
 
-More skills on [Agent Skills Marketplace](https://skillsmp.com/)
+More at [Agent Skills Marketplace](https://skillsmp.com/)
+
+## Options
+
+| Option | Description |
+|--------|-------------|
+| `--mnt-dir PATH` | Host directory to mount (default: `.`) |
+| `--no-mnt` | Don't mount any directory |
+| `--skills-dir PATH` | Skills directory (default: `skills/`) |
+| `--container-image` | Docker image for sandbox |
+| `-p, --prompt` | Single prompt (non-interactive) |
+| `--stream` | Stream output in non-interactive mode |
+
+## Examples
+
+```bash
+# Interactive mode (most common)
+persona
+persona --mnt-dir ~/projects/myapp
+persona --no-mnt
+persona --skills-dir ./my-skills
+
+# Single prompt
+persona "find all Python files in current directory"
+persona --stream -p "explain this code" < code.py
+```

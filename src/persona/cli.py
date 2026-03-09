@@ -10,6 +10,7 @@ from persona import __version__
 from persona.config import env, paths
 from persona.sandbox import manager
 from persona.agent import builder, tools
+from persona.agent.builder import get_mcp_status, get_model_name
 from persona.session import SessionManager
 from persona.repl import PersonaREPL
 
@@ -59,6 +60,13 @@ async def _main():
         dest="prompt_flag",
         help="Single prompt to execute (non-interactive mode)",
         default=None
+    )
+    parser.add_argument(
+        "--stream",
+        dest="stream",
+        action="store_true",
+        help="Enable streaming output in non-interactive mode",
+        default=False
     )
     parser.add_argument(
         "prompt",
@@ -117,13 +125,39 @@ async def _main():
         else:
             mnt_display = abs_path
     
+    # Determine skills directory display name
+    abs_skills = os.path.abspath(os.path.expanduser(skills_dir))
+    home = os.path.expanduser("~")
+    if abs_skills.startswith(home):
+        skills_display = "~" + abs_skills[len(home):]
+    else:
+        skills_display = abs_skills
+    
+    # Get MCP status
+    mcp_status = get_mcp_status()
+    
+    # Get model name
+    model_name = get_model_name()
+    
     if args.prompt:
-        # Non-interactive mode: single prompt
-        result = await agent.run(args.prompt)
-        print(result.output)
+        if args.stream:
+            async with agent.run_stream(args.prompt) as response:
+                async for chunk in response.stream_text():
+                    print(chunk, end="", flush=True)
+        else:
+            result = await agent.run(args.prompt)
+            print(result.output)
     else:
         # Interactive mode: use custom REPL
-        repl = PersonaREPL(agent, session_manager, prog_name="persona", mnt_dir=mnt_display)
+        repl = PersonaREPL(
+            agent,
+            session_manager,
+            prog_name="persona",
+            mnt_dir=mnt_display,
+            skills_dir=skills_display,
+            mcp_status=mcp_status,
+            model_name=model_name
+        )
         await repl.run()
     
     return True
