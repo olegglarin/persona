@@ -143,9 +143,17 @@ async def _main():
     
     if args.prompt:
         if args.stream:
-            async with agent.run_stream(args.prompt) as response:
-                async for chunk in response.stream_text():
-                    print(chunk, end="", flush=True)
+            from pydantic_ai.messages import PartDeltaEvent, PartStartEvent, TextPart, TextPartDelta
+            async with agent.iter(args.prompt) as agent_run:
+                async for node in agent_run:
+                    if agent.is_model_request_node(node):
+                        async with node.stream(agent_run.ctx) as stream:
+                            async for event in stream:
+                                if isinstance(event, PartStartEvent) and isinstance(event.part, TextPart):
+                                    print(event.part.content, end="", flush=True)
+                                elif isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
+                                    print(event.delta.content_delta, end="", flush=True)
+            print()
         else:
             result = await agent.run(args.prompt)
             print(result.output)
