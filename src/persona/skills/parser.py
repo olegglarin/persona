@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import re
+import xml.sax.saxutils as saxutils
 from pathlib import Path
 
 
@@ -7,25 +8,37 @@ def parse_skill(file_path: Path, skills_dir: Path):
     """Parse a single SKILL.md file and extract metadata."""
     with open(file_path, 'r') as file:
         content = file.read()
-    
+
     match = re.search(r'^---$(.*?)^---$', content, re.DOTALL | re.MULTILINE)
-    if match:
-        metadata_block = match.group(1).strip().split('\n')
-        metadata = dict(line.split(': ', 1) for line in metadata_block)
-        
-        relative_path = file_path.relative_to(skills_dir)
-        container_path = f"/skills/{relative_path}"
-        
-        xml_output = (
-            '<skill>\n'
-            f'<name>{metadata["name"]}</name>\n'
-            f'<description>{metadata["description"]}</description>\n'
-            f'<location>{container_path}</location>\n'
-            '</skill>'
-        )
-        return xml_output
-    else:
+    if not match:
         raise ValueError("Metadata section not found.")
+
+    metadata: dict[str, str] = {}
+    for line in match.group(1).splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if ': ' in line:
+            key, value = line.split(': ', 1)
+            metadata[key.strip()] = value.strip()
+
+    if 'name' not in metadata or 'description' not in metadata:
+        raise ValueError(f"Missing required fields 'name' and/or 'description' in {file_path}")
+
+    relative_path = file_path.relative_to(skills_dir)
+    container_path = f"/skills/{relative_path}"
+
+    name = saxutils.escape(metadata["name"])
+    description = saxutils.escape(metadata["description"])
+    location = saxutils.escape(container_path)
+
+    return (
+        '<skill>\n'
+        f'<name>{name}</name>\n'
+        f'<description>{description}</description>\n'
+        f'<location>{location}</location>\n'
+        '</skill>'
+    )
 
 
 def find_and_parse_skills(skills_dir: Path):
