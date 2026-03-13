@@ -1,282 +1,82 @@
-# AGENTS.md
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
 
-This is a universal AI agent CLI tool (`persona`) built with Pydantic-AI that supports Anthropic-style skills. It runs from CLI and uses Docker sandbox containers for safe command execution. The project uses Python 3.13+, uv for dependency management, and follows async-first patterns for I/O operations.
+`persona` is an AI agent CLI built with Pydantic-AI. It runs an interactive REPL and dispatches tool calls (bash commands, file writes, skill loading) into a Docker sandbox container.
 
-## Setup Commands
+## Commands
 
-- Sync dependencies: `uv sync`
-- Activate venv: `source .venv/bin/activate`
-- Add Python package: `uv add <package>`
-- Remove Python package: `uv remove <package>`
-- Build sandbox image: `docker build -t ubuntu.sandbox .`
+```bash
+uv sync                         # install dependencies
+source .venv/bin/activate       # activate venv
+docker build -t ubuntu.sandbox . # build sandbox image
 
-### Dependencies
+persona                         # interactive REPL
+persona "prompt"                # single prompt (non-interactive)
+persona -p "prompt" --stream    # single prompt with streaming output
+persona --skills-dir ./skills   # custom skills directory
+persona --no-mnt                # disable host directory mounting
+persona --mnt-dir /path/to/dir  # custom mount directory
 
-Key dependencies (see `pyproject.toml` for full list):
-- `pydantic-ai>=1.63.0` (updated from 1.33.0)
-- `rich>=13.0.0` (new)
-- `prompt-toolkit>=3.0.0` (new)
-- `platformdirs>=4.0.0` (new)
+# Testing
+pytest tests/ -v
+pytest tests/test_cli_eval.py -v                   # E2E CLI tests
+pytest tests/test_conversation_history.py -v       # conversation history tests
+python3 -m unittest discover -s skills -p "*_test.py" -v  # skill unit tests
+python3 -m py_compile src/persona/some_file.py     # syntax check
 
-## Build/Lint/Test Commands
-
-- Run application: `persona` (after `uv sync && source .venv/bin/activate`)
-- Run with custom skills dir: `persona --skills-dir ./skills`
-- Run without mounting host directory: `persona --no-mnt`
-- Run with custom mount directory: `persona --mnt-dir /path/to/dir`
-- Run single prompt: `persona "Your prompt"` or `persona -p "Your prompt"`
-- Run with streaming output: `persona --stream -p "Your prompt"`
-- Syntax check Python files: `find . -name "*.py" -exec python3 -m py_compile {} \;`
-- Run skill tests: `python3 -m unittest discover -s skills -p "*_test.py" -v`
-- Run all tests: `pytest tests/ -v`
-- Run E2E CLI tests: `pytest tests/test_cli_eval.py -v`
-- Run conversation history tests: `pytest tests/test_conversation_history.py -v`
-- Enable DEBUG mode: `DEBUG=true persona ...`
-- Add linting: `uv add ruff && ruff check .`
-- Add type checking: `uv add pyright && pyright .`
-
-### Debug Mode
-
-When `DEBUG=true`, logfire instruments:
-- Pydantic-AI operations
-- All HTTPX requests (`capture_all=True`)
-
-When `LOGFIRE=true`, logfire sends data to the configured logfire backend (requires token configuration).
-
-Optional: Set `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318` for local observability (e.g., Grafana Tempo, Jaeger)
-
-### MCP Configuration
-
-To enable MCP servers:
-
-1. Set `MCP_ENABLED=true` in `.env`
-2. Create `mcp_config.json` with server configuration (see `mcp_config.json.sample`)
-
-Example `mcp_config.json`:
-```json
-{
-  "mcpServers": {
-    "everything": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-everything"]
-    }
-  }
-}
+# Linting / type checking (install first)
+ruff check .
+pyright .
 ```
 
-MCP status is displayed in the REPL status bar: "Disabled", "No Config", "No Servers", "Ready (N servers)", or "Error".
+## Environment & Configuration
 
-## Project Structure
+- Copy `.env.example` → `.env` and configure API keys
+- `DEBUG=true persona ...` — enables logfire instrumentation of Pydantic-AI and all HTTPX requests
+- `LOGFIRE=true` — sends telemetry to configured logfire backend
+- `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318` — optional local observability
+- Sandbox env vars go in `.env.sandbox` (see `.env.sandbox.example`)
+
+### MCP Servers
+
+Set `MCP_ENABLED=true` in `.env`, then create `mcp_config.json` (see `mcp_config.json.sample`). Status is displayed in the REPL status bar.
+
+## Architecture
+
+### Request Flow
 
 ```
-/Users/skoryaga/src/persona
-├── src/persona/           # Package source
-│   ├── __init__.py       # Package with version
-│   ├── cli.py            # CLI entry point and argument parsing
-│   ├── repl.py           # Custom REPL loop with streaming and /commands
-│   ├── commands.py       # /command registry (save, load, list, etc.)
-│   ├── session.py        # Session persistence management
-│   ├── agent/            # Agent builder and tools
-│   │   ├── __init__.py
-│   │   ├── builder.py    # create_agent() function
-│   │   └── tools.py      # create_tools() function (run_cmd, save_text_file, load_skill)
-│   ├── config/           # Configuration
-│   │   ├── __init__.py
-│   │   ├── env.py        # Environment handling
-│   │   └── paths.py      # Path resolution
-│   ├── sandbox/          # Docker sandbox management
-│   │   ├── __init__.py
-│   │   ├── container.py  # Container functions
-│   │   └── manager.py    # ContainerManager class
-│   ├── skills/           # Skills
-│   │   ├── __init__.py
-│   │   └── parser.py     # Skill parsing
-│   └── py.typed          # PEP 561 type marker
-├── pyproject.toml        # Project metadata and dependencies
-├── AGENTS.md             # This file for agent instructions
-├── instructions.md       # System prompt for the agent
-├── skills/               # Skill definitions (Anthropic-style)
-│   ├── analyzing-logs/
-│   ├── candidate-assessment/
-│   ├── pdf/
-│   ├── planning-with-files/
-│   ├── skill-creator/
-│   ├── skillsmp-search/
-│   └── web-search/
-├── mnt/                  # Default mount directory for user files
-│   └── .gitignore        # Git ignore for mount directory
-├── .env.example          # Configuration template
-├── .env.sandbox.example  # Sandbox environment variables template
-├── mcp_config.json.sample  # MCP server configuration template
-├── Dockerfile            # Sandbox container definition
-└── tests/                # Test suite
-    ├── conftest.py       # Pytest fixtures
-    ├── test_cli_eval.py  # CLI E2E tests
-    ├── test_conversation_history.py  # Conversation memory tests
-    ├── test_config_env.py
-    ├── test_config_paths.py
-    ├── test_datetime_formatter.py
-    ├── test_mcp.py
-    ├── test_sandbox_container.py
-    └── test_sandbox_manager.py
+CLI args (cli.py)
+  → create_agent() + ContainerManager (agent/builder.py, sandbox/manager.py)
+  → PersonaREPL.run() (repl.py)
+      → CommandRegistry.handle() — /commands intercepted before agent sees them
+      → agent.iter() — autonomous loop:
+          ModelRequestNode → streams text via PartStartEvent / PartDeltaEvent
+          CallToolsNode    → executes tools, loops back automatically
+          End              → task complete
 ```
 
-## Architecture Overview
+### Key Components
 
-### Custom REPL (`repl.py`)
+**`repl.py` — `PersonaREPL`**: The interactive loop. Uses `prompt_toolkit` for input with history, `rich.Live + Markdown` for streaming output, and `rich.Status` spinner while waiting for the first token. Handles `Ctrl+C` via `SIGINT` signal handler + `InterruptedException` for clean mid-stream interruption.
 
-The application uses a custom REPL (Read-Eval-Print Loop) instead of `agent.to_cli()`:
+**`agent/tools.py` — agent tools**: All tools use `@agent.tool_plain` (not `@agent.tool`). Three tools:
+- `run_cmd(cmd)` — `docker exec` into the sandbox container
+- `save_text_file(path, content)` — writes to sandbox, creates parent dirs
+- `load_skill(skill_name)` — reads `skills/{name}/SKILL.md` from the container
 
-- **`PersonaREPL` class**: Main REPL implementation with:
-  - Session-aware prompt: `persona [session_name] ➤`
-  - Streaming text output with rich markdown rendering
-  - Integration with `/commands` registry
-  - Uses `agent.iter()` for autonomous execution
-  - Handles `PartStartEvent` and `PartDeltaEvent` for complete streaming
+**`session.py` — `SessionManager`**: Persists conversation history as JSON using `ModelMessagesTypeAdapter`. Auto-saves to 'latest' after every response; `/save`, `/load`, `/list`, `/new` commands manage named sessions.
 
-- **Autonomous Execution**: Uses `agent.iter()` to:
-  - Stream text responses in real-time via `ModelRequestNode`
-  - Automatically execute tools via `CallToolsNode`
-  - Continue the loop until `End` node (task complete)
-  - No user input needed between tool calls
+**`sandbox/manager.py` — `ContainerManager`**: Starts/stops the Docker container. Mounts: `/mnt` (user files, default is current directory), `/skills` (skill definitions), `/tmp`. Registers `atexit` cleanup. Syncs host timezone to container.
 
-### Session Management (`session.py`)
+**`skills/parser.py`**: Parses YAML frontmatter from `skills/{name}/SKILL.md`. Skills may also have `examples.md`, `reference.md`, and `scripts/`.
 
-- **`SessionManager` class**: Handles conversation persistence:
-  - Auto-saves to platform-specific config directory
-  - JSON serialization with `ModelMessagesTypeAdapter`
-  - Methods: `save_session()`, `load_session()`, `list_sessions()`
-  - Auto-save after each response to 'latest' session
+### Non-Obvious Patterns
 
-### Commands (`commands.py`)
-
-- **`CommandRegistry` class**: Processes /commands:
-  - `/save [name]` - Save to current or new session name
-  - `/load <name>` - Load session, updates current session name
-  - `/list` - List all saved sessions
-  - `/new` - Clear history, reset to 'latest'
-  - `/clear` - Clear terminal screen
-  - `/help` - Show available commands
-  - `/exit`, `/quit` - Exit CLI
-
-Commands are processed **before** the agent sees them (agent never receives /commands).
-
-### Agent Tools (`agent/tools.py`)
-
-Tools available to the agent:
-- **`run_cmd(cmd)`**: Execute bash commands in Docker sandbox
-- **`save_text_file(path, content)`**: Write files to sandbox with parent dir creation
-- **`load_skill(skill_name)`**: Load skill definitions from `/skills/{skill}/SKILL.md`
-
-## Code Style Guidelines
-
-### Imports
-
-- Group imports in this order: standard library, third-party, local application
-- Use `async with` for async file operations via `aiofiles`
-- Import only what is needed; avoid wildcard imports
-- Sort imports alphabetically within groups
-- One import per line; no comma-separated imports
-
-### Formatting
-
-- Use 4 spaces for indentation (no tabs)
-- Keep lines under 120 characters where reasonable
-- Use blank lines to separate logical sections within functions
-- No comments unless explaining non-obvious logic (per project convention)
-- Use trailing commas in multi-line calls and data structures
-- Opening braces on same line for function calls and control statements
-- Use black-style formatting for multi-line expressions
-
-### Types
-
-- Use type hints for function parameters and return values
-- Use `async def` for functions that perform async I/O operations
-- Use Pydantic models for structured data when appropriate
-- Prefer `X | Y` union syntax (Python 3.10+)
-- Use `X | None` rather than `Optional[X]`
-- Use `Literal` for enum-like string constants
-- Use `TypedDict` or Pydantic models for complex dictionary structures
-
-### Naming Conventions
-
-- `snake_case` for variables, functions, and methods
-- `PascalCase` for classes and types
-- `UPPER_SNAKE_CASE` for constants
-- Prefix private variables with underscore: `_private_var`
-- Descriptive names preferred over abbreviations (e.g., `container_name` not `cname`)
-- Use single-letter variables only for trivial counters or lambda functions
-- Prefix async functions with meaningful verbs: `fetch_data()`, `parse_file()`
-
-### Error Handling
-
-- Use try/except blocks with specific exception types
-- Return `False` or error strings from functions rather than raising for expected failures
-- Log errors with clear messages including the operation attempted
-- Always handle subprocess errors explicitly (TimeoutExpired, SubprocessError)
-- Use custom exception classes for domain-specific errors
-- Never suppress exceptions without explicit logging
-- Clean up resources in finally blocks or use context managers
-- Handle `KeyboardInterrupt` in subprocess operations for user cancellation
-
-### Async Patterns
-
-- Use `async def` for I/O-bound operations (file, network, subprocess)
-- Use `await` with async libraries (aiofiles, async HTTP clients)
-- Wrap blocking operations (subprocess, file I/O) in async functions for agent tools
-- Return results directly; avoid unnecessary wrapping of async calls
-- Use `asyncio.gather()` for concurrent async operations when appropriate
-- Prefer async context managers (`async with`) over sync versions for I/O
-
-### Streaming and UI
-
-- Use `agent.iter()` for autonomous execution with streaming
-- Handle both `PartStartEvent` (initial content) and `PartDeltaEvent` (subsequent chunks)
-- Use `rich.Live` with `Markdown` for real-time formatted output
-- Set `refresh_per_second=20` for smooth streaming
-- Use `prompt_toolkit` for command history and input handling
-- Display spinner while awaiting first token from LLM
-- Handle Ctrl+C gracefully with signal handlers for agent interruption
-- Use custom `InterruptedException` for clean interrupt propagation
-- Ctrl+Z suspends REPL to background (resume with `fg`)
-
-### Docker/Sandbox Integration
-
-- Always expand user paths: `os.path.abspath(os.path.expanduser(path))`
-- Check directory existence before mounting volumes: `os.path.isdir(path)`
-- Use descriptive container names with environment variable fallbacks
-- Register cleanup functions with `atexit` for graceful shutdown
-- Set reasonable timeouts on all container operations (30s default)
-- Handle Docker daemon not running gracefully with helpful error messages
-- Use `docker exec` for running commands inside the sandbox container
-- Enable DEBUG mode for container lifecycle messages: `DEBUG=true persona ...`
-- Default mount directory is current directory (`.`); use `--no-mnt` to disable mounting
-- Sandbox environment variables can be set in `.env.sandbox` file
-- Host timezone is synced to container via `/etc/localtime` and `TZ` environment variable
-
-### Project-Specific Patterns
-
-- Tools for the agent are decorated with `@agent.tool_plain` (not `@agent.tool`)
-- Use `subprocess.run` with `capture_output=True` and `text=True` for shell commands
-- Set timeouts on all subprocess calls (30s default, 10-20s for quick operations)
-- Mount points: `/mnt` for user files, `/skills` for skill definitions, `/tmp` for temp files
-- Use `tempfile` module for secure temporary file handling
-- Agent tools should be async and return strings or structured data
-- Skills are defined in `skills/{skill_name}/SKILL.md` with YAML frontmatter
-- Skills can include `examples.md` and `reference.md` for detailed documentation
-- Some skills include helper scripts in `scripts/` directory and API references in `references/`
-- Session name is displayed in prompt and updated on `/load` and `/save`
-- Auto-save to 'latest' happens after every agent response
-
-### General
-
-- Keep functions focused and under 50 lines when possible
-- Use early returns to reduce nesting
-- Prefer returning structured data (dicts, lists) over complex objects
-- Constants at module level with environment variable fallbacks
-- Use f-strings for string formatting (Python 3.13+)
-- Document public APIs with docstrings; private methods may omit
-- Use dataclasses for simple data containers; Pydantic models for validation
-- Avoid deep nesting; extract helper functions when needed
+- Agent tools are registered at startup inside `create_tools()` via closure over `container_name` — the container must exist before tool registration.
+- `/commands` are processed by `CommandRegistry` before the agent loop; the agent never receives them.
+- Single-prompt mode (non-interactive) still uses the same `agent.iter()` loop, just exits after one turn.
+- `instructions.md` is the system prompt loaded at agent creation time.

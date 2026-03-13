@@ -100,10 +100,12 @@ async def _main():
 
     agent = builder.create_agent(Path(skills_dir))
     run_cmd, save_text_file, load_skill = tools.create_tools(container_mgr.name, Path(skills_dir))
-    
+
     agent.tool_plain(run_cmd)
     agent.tool_plain(save_text_file)
     agent.tool_plain(load_skill)
+
+    tool_fns = {"run_cmd": run_cmd, "save_text_file": save_text_file, "load_skill": load_skill}
     
     if not container_mgr.start():
         return False
@@ -156,7 +158,8 @@ async def _main():
             mnt_dir=mnt_display,
             skills_dir=skills_display,
             mcp_status=mcp_status,
-            model_name=model_name
+            model_name=model_name,
+            tool_fns=tool_fns,
         )
         await repl.run()
     

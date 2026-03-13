@@ -2,7 +2,10 @@
 """Custom REPL for persona CLI with streaming and command support."""
 
 import asyncio
+import json
+import re
 import signal
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -20,11 +23,14 @@ from pydantic_ai.messages import (
     FunctionToolCallEvent,
     FunctionToolResultEvent,
     ModelMessage,
+    ModelRequest,
     ModelResponse,
     PartDeltaEvent,
     PartStartEvent,
     TextPart,
     TextPartDelta,
+    ToolCallPart,
+    ToolReturnPart,
 )
 from pydantic_ai.usage import RunUsage
 
@@ -35,6 +41,14 @@ from persona.commands import CommandRegistry
 class InterruptedException(Exception):
     """Raised when user presses Ctrl+C during agent execution."""
     pass
+
+
+_TEXT_TOOL_PATTERNS = [
+    # <function=name>{"arg": "val"}</function>
+    re.compile(r'<function=(\w+)>(.*?)</function>', re.DOTALL),
+    # <tool_call>{"name": "...", "arguments": {...}}</tool_call>
+    re.compile(r'<tool_call>(.*?)</tool_call>', re.DOTALL),
+]
 
 
 class PersonaREPL:
@@ -50,10 +64,11 @@ class PersonaREPL:
         mnt_dir: Optional[str] = None,
         skills_dir: Optional[str] = None,
         mcp_status: Optional[str] = None,
-        model_name: Optional[str] = None
+        model_name: Optional[str] = None,
+        tool_fns: Optional[dict] = None,
     ):
         """Initialize the REPL.
-        
+
         Args:
             agent: The pydantic-ai agent to use
             session_manager: SessionManager for persistence
@@ -62,6 +77,7 @@ class PersonaREPL:
             skills_dir: Skills directory to display in status bar
             mcp_status: MCP status string to display in status bar
             model_name: Model name to display in status bar
+            tool_fns: Dict of tool callables for text-format tool call fallback
         """
         self.agent = agent
         self.session_manager = session_manager
@@ -70,6 +86,7 @@ class PersonaREPL:
         self.skills_dir = skills_dir
         self.mcp_status = mcp_status or "Disabled"
         self.model_name = model_name or "unknown"
+        self.tool_fns = tool_fns or {}
         self.console = Console()
         
         self.message_history: list[ModelMessage] = []
@@ -95,7 +112,29 @@ class PersonaREPL:
         if PersonaREPL._interrupted:
             PersonaREPL._interrupted = False
             raise InterruptedException()
-    
+
+    def _parse_text_tool_calls(self, text: str) -> list[tuple[str, dict]]:
+        """Return list of (tool_name, args_dict) parsed from text-based tool calls."""
+        calls = []
+        for pat in _TEXT_TOOL_PATTERNS:
+            for m in pat.finditer(text):
+                if m.lastindex == 2:          # <function=name>json</function>
+                    name, raw = m.group(1), m.group(2)
+                else:                          # <tool_call>json</tool_call>
+                    try:
+                        obj = json.loads(m.group(1))
+                        name = obj.get("name", "")
+                        raw = json.dumps(obj.get("arguments", {}))
+                    except json.JSONDecodeError:
+                        continue
+                try:
+                    args = json.loads(raw.strip())
+                except json.JSONDecodeError:
+                    args = {}
+                if name in self.tool_fns:
+                    calls.append((name, args))
+        return calls
+
     def _get_status_bar(self) -> str:
         """Generate the bottom toolbar status bar content."""
         tokens_str = f"{self.session_usage.total_tokens:,}" if self.session_usage.total_tokens else "0"
@@ -224,10 +263,11 @@ class PersonaREPL:
         status = self.console.status("[bold cyan]Thinking...")
         status.start()
         status_active = True
-        
+
         buffer = ""
         live = None
         interrupted = False
+        had_real_tool_calls = False
         
         try:
             async with self.agent.iter(
@@ -267,6 +307,7 @@ class PersonaREPL:
                                                 live.update(Markdown(buffer))
                     
                     elif Agent.is_call_tools_node(node):
+                        had_real_tool_calls = True
                         if live is not None:
                             live.stop()
                             live = None
@@ -278,7 +319,6 @@ class PersonaREPL:
                                     tool_name = event.part.tool_name
                                     args = event.part.args or {}
                                     if isinstance(args, str):
-                                        import json
                                         try:
                                             args = json.loads(args)
                                         except json.JSONDecodeError:
@@ -304,6 +344,26 @@ class PersonaREPL:
                     self.session_usage = self._get_last_request_usage(self.message_history)
                     if hasattr(self, 'prompt_session') and self.prompt_session.app:
                         self.prompt_session.app.invalidate()
+
+            # Recovery: detect text-format tool calls when the model bypassed the API
+            if not had_real_tool_calls and buffer and self.tool_fns:
+                text_calls = self._parse_text_tool_calls(buffer)
+                if text_calls:
+                    synthetic: list[ModelMessage] = []
+                    for tool_name, args in text_calls:
+                        tool_id = str(uuid.uuid4())[:8]
+                        result = await self.tool_fns[tool_name](**args)
+                        self.console.print(f"[dim][FALLBACK][/dim] {tool_name}: {list(args.values())[:1]}")
+                        synthetic.append(ModelResponse(parts=[
+                            ToolCallPart(tool_name=tool_name, args=args, tool_call_id=tool_id)
+                        ]))
+                        synthetic.append(ModelRequest(parts=[
+                            ToolReturnPart(tool_name=tool_name, content=str(result), tool_call_id=tool_id)
+                        ]))
+                    # Replace the last ModelResponse (the bad text one) with synthetic pairs
+                    self.message_history = self.message_history[:-1] + synthetic
+                    # Re-run so the model can respond to the tool results
+                    await self._run_agent_iter("")
         except InterruptedException:
             interrupted = True
         except KeyboardInterrupt:
